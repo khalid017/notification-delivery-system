@@ -1,0 +1,63 @@
+# ---------- Angular / Node (FE) ----------
+node_modules/
+dist/
+out-tsc/
+tmp/
+bazel-out/
+.angular/
+coverage/
+npm-debug.log*
+yarn-error.log*
+testem.log
+connect.lock
+libpeerconnection.log
+typings/
+__screenshots__/
+.sass-cache/
+
+# ---------- .NET (BE) ----------
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+.vs/
+TestResults/
+publish/
+*.nupkg
+
+# ---------- Secrets and local config (never commit) ----------
+.env
+.env.*
+appsettings.*.local.json
+appsettings.Development.json
+secrets.json
+*.pem
+
+# ---------- AWS / deploy artifacts ----------
+*.zip
+lambda-package/
+
+# ---------- IDEs and editors ----------
+.idea/
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.history/*
+
+# ---------- System files ----------
+.DS_Store
+Thumbs.db
+
+# ---------- Local Docker data ----------
+mongo-data/
