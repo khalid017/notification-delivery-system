@@ -12,7 +12,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
 
 ## B1. Foundation
 
-- [ ] **B1.1 Solution and projects**
+- [x] **B1.1 Solution and projects**
   Create `BE/NotificationPlatform.sln`, the six `src` projects and `tests/NotificationPlatform.Services.Tests`, with NuGet packages and project references exactly as in BE-01 sections 4 and 6.
   *Done when:* `dotnet build` passes and no project references violate the rules in 6.3.
 

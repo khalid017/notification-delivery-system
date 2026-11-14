@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\NotificationPlatform.Domain\NotificationPlatform.Domain.csproj" />
+    <ProjectReference Include="..\NotificationPlatform.Services\NotificationPlatform.Services.csproj" />
+    <ProjectReference Include="..\NotificationPlatform.DataAccess\NotificationPlatform.DataAccess.csproj" />
+    <ProjectReference Include="..\NotificationPlatform.Integrations\NotificationPlatform.Integrations.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Amazon.Lambda.AspNetCoreServer.Hosting" Version="2.2.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.15" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>
