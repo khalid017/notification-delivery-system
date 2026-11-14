@@ -1,12 +1,14 @@
+using NotificationPlatform.DataAccess;
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
-
 builder.Services.AddControllers();
+builder.Services.AddDataAccess(builder.Configuration);
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Create MongoDB indexes once at startup (idempotent; failures are logged, not fatal).
+await app.Services.GetRequiredService<MongoIndexInitializer>().EnsureIndexesAsync();
 
 app.UseAuthorization();
 

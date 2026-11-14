@@ -65,6 +65,13 @@ A multi-tenant email notification platform. Third-party apps send emails through
 | Worker | `Amazon.Lambda.Core`, `Amazon.Lambda.SQSEvents`, `Amazon.Lambda.Serialization.SystemTextJson` |
 | Tests | `xunit`, `NSubstitute` (or Moq) |
 
+**Version and package notes (decided during B1.1):**
+- `BE/global.json` pins the SDK to `10.0.100` with `rollForward: latestFeature` (any 10.0.x SDK, never 11), because a newer preview SDK may be installed side by side.
+- "Latest compatible with .NET 10" means the **10.0.x** line for Microsoft packages: `Microsoft.AspNetCore.Authentication.JwtBearer` and all `Microsoft.Extensions.*` packages are pinned to `10.0.15`, because their newest versions (11.0.0) belong to .NET 11.
+- Small framework packages are also allowed where the `AddXxx()` methods and options need them (none are MongoDB or AWS): Services adds `Microsoft.Extensions.DependencyInjection.Abstractions` and `Microsoft.Extensions.Options`. DataAccess adds `Microsoft.Extensions.Configuration.Abstractions`, `Microsoft.Extensions.Options.ConfigurationExtensions`, `Microsoft.Extensions.Options.DataAnnotations` and `Microsoft.Extensions.Logging.Abstractions`. Integrations adds `Microsoft.Extensions.Configuration.Abstractions`.
+- The solution file is the classic `.sln` format (`dotnet new sln --format sln`), not `.slnx`.
+- The Worker `.csproj` sets `GenerateRuntimeConfigurationFiles`, `AWSProjectType=Lambda` and `CopyLocalLockFileAssemblies`.
+
 ---
 
 ## 5. System at a Glance
@@ -117,8 +124,8 @@ notification-delivery-system/               repo root
 BE/
 ├── NotificationPlatform.sln
 ├── src/
-│   ├── NotificationPlatform.Domain/              entities and constants only
-│   │   ├── Entities/                             Tenant, Notification, DeliveryLog
+│   ├── NotificationPlatform.Domain/              domain models and constants only
+│   │   ├── DomainModels/                         Tenant, Notification, DeliveryLog
 │   │   └── Constants/                            NotificationStatus, DeliveryStatus
 │   │
 │   ├── NotificationPlatform.Services/            business logic AND the interfaces it needs
@@ -131,7 +138,10 @@ BE/
 │   │   └── ServiceCollectionExtensions.cs        AddServices()
 │   │
 │   ├── NotificationPlatform.DataAccess/          MongoDB implementations
-│   │   ├── MongoContext.cs, MongoIndexInitializer.cs
+│   │   ├── MongoOptions.cs, MongoMappings.cs     options; BSON conventions (camelCase, ignore extra fields)
+│   │   ├── MongoContext.cs                       client + database, generic GetCollection<T>()
+│   │   ├── MongoDataAccessBase.cs                generic base every Mongo DAL inherits
+│   │   ├── MongoIndexInitializer.cs
 │   │   ├── TenantDataAccess.cs, NotificationDataAccess.cs, DeliveryLogDataAccess.cs
 │   │   └── ServiceCollectionExtensions.cs        AddDataAccess(config)
 │   │
@@ -173,7 +183,7 @@ Api / Worker ──► DataAccess ───┐
 ### 6.4 Rules
 
 1. **The consumer owns the abstraction.** Interfaces live in `Services/Abstractions`, because Services is the project that uses them. DataAccess and Integrations implement them. Never put an interface in the same project as its implementation.
-2. **Domain has no references and no NuGet packages.** Entities are plain C# classes with no MongoDB attributes. Ids are strings generated in DataAccess with `ObjectId.GenerateNewId().ToString()`.
+2. **Domain has no references and no NuGet packages.** Domain models (folder `DomainModels/`, namespace `NotificationPlatform.Domain.DomainModels`) are plain C# classes with no MongoDB attributes. DataAccess maps them with driver conventions instead (BE-02 section 6.3). Ids are strings generated in DataAccess with `ObjectId.GenerateNewId().ToString()`.
 3. **Services never references MongoDB or AWS packages.**
 4. **Hosts only wire things up.** Api and Worker call `AddServices()`, `AddDataAccess(config)` and `AddIntegrations(config)`. Controllers call Services only, never a data access class.
 5. **Controllers never return entities.** Map to response DTOs so `passwordHash` and `apiKeyHash` can't leak.
@@ -200,3 +210,15 @@ Build in this order. Run and verify each milestone before moving on. The fronten
 ## 8. Starter Prompt for Claude Code
 
 > Read `docs/BE-01-plan.md` and `docs/BE-02-details.md`. The repo root is `notification-delivery-system`. Create the .NET solution directly inside the existing empty `BE/` folder (`BE/NotificationPlatform.sln`, `BE/src/...`, `BE/tests/...`), keeping the `NotificationPlatform.*` project names. Do not touch `FE/`. Build the backend exactly as specified, following the milestone order in the plan and the project dependency rules in section 6.3. Keep it simple. Do not build anything listed as out of scope. The response shapes in `BE-02-details.md` section 5 are a contract with the frontend, so match them exactly. Start with B1 and stop after each milestone so I can verify it.
+
+---
+
+## 9. Change Log
+
+Decisions made during the build that change or refine this plan. Each one is also applied in place above.
+
+| Date | Milestone | Change | Sections |
+| --- | --- | --- | --- |
+| 2026-11-13 | B1 planning | Domain folder is `DomainModels/` (namespace `NotificationPlatform.Domain.DomainModels`) instead of `Entities/` | 6.2, 6.4 |
+| 2026-11-14 | B1.1 | `global.json` pins SDK 10.0.x. Classic `.sln` format. Microsoft packages pinned to the 10.0.x line (10.0.15). Extra framework-only `Microsoft.Extensions.*` packages allowed in Services, DataAccess and Integrations. Worker `.csproj` has the Lambda build properties | 4 |
+| 2026-11-15 | B1.2 | DataAccess gains `MongoOptions`, `MongoMappings` (conventions, no class maps) and the generic `MongoDataAccessBase<T>`. `MongoContext` exposes `GetCollection<T>()` instead of one property per collection | 6.2, 6.4 |

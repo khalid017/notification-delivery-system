@@ -16,7 +16,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
   Create `BE/NotificationPlatform.sln`, the six `src` projects and `tests/NotificationPlatform.Services.Tests`, with NuGet packages and project references exactly as in BE-01 sections 4 and 6.
   *Done when:* `dotnet build` passes and no project references violate the rules in 6.3.
 
-- [ ] **B1.2 Domain, abstractions and data layer**
+- [x] **B1.2 Domain, abstractions and data layer**
   Domain entities and status constants. The five interfaces in `Services/Abstractions`. In DataAccess: `MongoContext`, `MongoIndexInitializer` (indexes from BE-02 section 4), `AddDataAccess(config)`. Root `docker-compose.yml` with MongoDB only.
   *Done when:* `docker compose up` starts Mongo and the indexes are created on API startup.
 

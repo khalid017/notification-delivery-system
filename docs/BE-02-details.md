@@ -107,7 +107,7 @@ Use the built-in authentication system with **two schemes**:
 
 ## 3. Configuration (Environment Variables)
 
-.NET maps `Section__Key` environment variables to `Section:Key`. Use the same names locally and in Lambda. Bind them to strongly typed options classes (`JwtOptions`, `MongoOptions`, `EmailOptions`, `QueueOptions`) with the options pattern, and validate them on startup so a missing value fails fast.
+.NET maps `Section__Key` environment variables to `Section:Key`. Use the same names locally and in Lambda. Bind them to strongly typed options classes (`JwtOptions`, `MongoOptions`, `EmailOptions`, `QueueOptions`) with the options pattern, and validate them on startup so a missing value fails fast (`ValidateDataAnnotations().ValidateOnStart()`). Each options class is added in the milestone whose code uses it (`MongoOptions` in B1.2, `JwtOptions` in B2.1, `EmailOptions` in B3.2, `QueueOptions` in B5.1), so earlier milestones don't require secrets they don't use.
 
 **API Lambda**
 
@@ -180,7 +180,7 @@ Ids are strings (an ObjectId hex string). All timestamps are UTC.
 }
 ```
 
-**Indexes** (created at API startup, wrapped in try/catch, idempotent)
+**Indexes** (created at API startup by `MongoIndexInitializer.EnsureIndexesAsync()`, called in `Program.cs` right after `Build()`. Idempotent. All five creations sit in **one** try/catch that logs the error and lets the API start, so an unreachable database costs one server-selection timeout, not five)
 
 | Collection | Index | Why |
 | --- | --- | --- |
@@ -285,7 +285,7 @@ Every notification query filters by the authenticated `tenantId`. A notification
 
 ### 6.1 Domain
 
-Plain entities `Tenant`, `Notification`, `DeliveryLog`, and string constants for statuses. No logic that needs external services.
+Plain domain models `Tenant`, `Notification`, `DeliveryLog` in the `DomainModels/` folder (namespace `NotificationPlatform.Domain.DomainModels`), and string constants for statuses in `Constants/` (`NotificationStatus` also exposes an `All` list used by the status filter validation). No logic that needs external services.
 
 ### 6.2 Services
 
@@ -303,14 +303,22 @@ Plain entities `Tenant`, `Notification`, `DeliveryLog`, and string constants for
 | Interface | Methods (indicative) |
 | --- | --- |
 | `ITenantDataAccess` | `GetByIdAsync`, `GetByEmailAsync`, `GetByApiKeyHashAsync`, `InsertAsync`, `UpdateApiKeyAsync` |
-| `INotificationDataAccess` | `InsertAsync`, `GetByIdAsync(tenantId, id)`, `GetByIdForProcessingAsync(id)`, `UpdateStatusAsync`, `ListAsync(tenantId, status, page, pageSize)`, `CountByStatusAsync(tenantId, status)` |
-| `IDeliveryLogDataAccess` | `InsertAsync`, `GetByNotificationAsync(notificationId)` |
+| `INotificationDataAccess` | `InsertAsync`, `GetByIdAsync(tenantId, id)`, `GetByIdForProcessingAsync(id)`, `MarkProcessingAsync(id, attempt)` (status `processing`, `attempts`, `updatedAt`), `UpdateStatusAsync(id, status, lastError, deliveredAt)` (sets all three plus `updatedAt`; a null `lastError` clears it), `ListAsync(tenantId, status, page, pageSize)` returning `(Items, Total)` newest first, `CountByStatusAsync(tenantId, status)` |
+| `IDeliveryLogDataAccess` | `InsertAsync`, `GetByNotificationAsync(notificationId)` (oldest first) |
 | `IEmailSender` | `SendAsync(to, subject, body, ct)` |
 | `INotificationQueue` | `EnqueueAsync(notificationId, ct)` |
 
+Every method is async and takes `CancellationToken ct = default` as its last parameter, so cancellation (an aborted HTTP request, host shutdown) can flow from the controller or worker down to the MongoDB driver and AWS SDK. `InsertAsync` methods set the model's `Id`.
+
 ### 6.3 DataAccess and Integrations
 
-- **DataAccess:** `MongoContext` holds the client and collections. The client is created once and reused across Lambda invocations. `MongoIndexInitializer` creates the indexes. One class per interface. Ids are generated here.
+- **DataAccess:**
+  - `MongoOptions` (section `Mongo`, both values `[Required]`).
+  - `MongoContext` (singleton) holds the one `MongoClient` and the database, created once and reused across requests and Lambda invocations. It has no property per collection: `GetCollection<T>()` resolves a collection from the model type, named **camelCase type name + "s"** (`Tenant` → `tenants`, `DeliveryLog` → `deliveryLogs`). Renaming a model class therefore renames its collection.
+  - `MongoDataAccessBase<T>` (internal, abstract) is the base every Mongo data access class inherits, e.g. `TenantDataAccess : MongoDataAccessBase<Tenant>, ITenantDataAccess`. It provides `Collection` and `NewId()` (an ObjectId hex string). One class per interface. Ids are generated here.
+  - `MongoMappings` registers BSON **conventions only** (no class maps, no attributes) for the `DomainModels` namespace: `CamelCaseElementNameConvention` and `IgnoreExtraElementsConvention(true)`. Ids rely on driver defaults: a property named `Id` maps to `_id`, and a `string` is stored as a BSON string. `DateTime` values are stored and read back as UTC. `MongoContext` registers the conventions in its constructor, once per process, before any collection is used.
+  - `MongoIndexInitializer` creates the indexes (section 4).
+  - The Services interfaces are the only thing Services sees, so moving to another database (SQL, DynamoDB) means new implementations of those interfaces and different registrations in `AddDataAccess`. Generics stay inside DataAccess. There is no generic repository interface in Services.
 - **Integrations:** `SesEmailSender` uses the SES v2 API with a plain-text body and the `Email__From` address. `SqsNotificationQueue` sends the notification id as the message body.
 
 ### 6.4 DeliveryProcessor
@@ -318,10 +326,12 @@ Plain entities `Tenant`, `Notification`, `DeliveryLog`, and string constants for
 `DeliveryProcessor.ProcessAsync(notificationId, attempt, maxAttempts, ct)` returns a result (`Delivered`, `Retry` or `FailedFinal`, plus the error) instead of throwing, so it is easy to test and each host decides what to do.
 
 1. Load the notification. If it doesn't exist, return `Delivered` (nothing to do). If its status is already `delivered`, return `Delivered`. This makes duplicate SQS deliveries harmless.
-2. Set status `processing` and `attempts = attempt`.
+2. Set status `processing` and `attempts = attempt` (`MarkProcessingAsync`).
 3. Call `IEmailSender.SendAsync`.
 4. **Success:** insert a delivery log (`success`), set status `delivered`, set `deliveredAt`, clear `lastError`.
 5. **Failure:** insert a delivery log (`failed`, with the error message), set `lastError`. If `attempt >= maxAttempts`, set status `failed` and return `FailedFinal`. Otherwise set status `queued` and return `Retry`.
+
+**Cancellation:** the token is passed to the load and to `IEmailSender.SendAsync`, but not to the delivery-log insert and status update that follow a successful send, so a cancellation can't leave an email sent with no record of it.
 
 Callers:
 - **Worker Lambda:** `attempt` comes from `ApproximateReceiveCount`. On `Retry` or `FailedFinal` it **throws**, so SQS retries the message or moves it to the DLQ.
@@ -336,7 +346,8 @@ Callers:
 
 ## 7. Local Development
 
-1. **MongoDB:** `docker compose up`. The compose file contains only the official `mongo` image on port 27017 with a named volume. Alternatively, point `Mongo__ConnectionString` at your Atlas cluster and skip Docker.
+0. **SDK:** the .NET 10 SDK. `BE/global.json` makes `dotnet` use it even when a newer SDK is installed.
+1. **MongoDB:** `docker compose up -d` from the repo root (Docker Desktop must be running). The compose file contains only the official `mongo:8` image, published on `127.0.0.1:27017` only (the container has no authentication, so it must not be reachable from the network), with a named volume `mongo-data` for `/data/db`. The data lives in Docker's own storage, not in the repo folder (the repo is under OneDrive, which must not sync live database files). `docker compose stop` keeps the data. `docker compose down -v` deletes it. Inspect with `docker compose exec mongo mongosh notifications`. Alternatively, point `Mongo__ConnectionString` at your Atlas cluster and skip Docker.
 2. **API:** `dotnet run --project src/NotificationPlatform.Api`. Keep local settings in `appsettings.Development.json` (git-ignored) or .NET user-secrets: `Mongo__ConnectionString=mongodb://localhost:27017`, `Mongo__Database`, `Jwt__Secret`, `Email__From`, and no `Queue__Url`. Use a fixed local port, for example 5080, that the frontend's dev proxy points to.
 3. **Email locally uses real SES.** You need an AWS profile on your machine (`aws configure`) whose IAM user can call `ses:SendEmail`, and `AWS_REGION` set to the region where you verified your sender. While SES is in the sandbox, verify every recipient address you test with.
 
@@ -423,3 +434,20 @@ Unit tests live in `NotificationPlatform.Services.Tests` and use mocks of the Se
 | `DeliveryProcessor` | Success on first attempt. Failure then success. Final failure at the last attempt. Already-delivered notification is skipped |
 
 End-to-end checks are the manual "done when" checks in the plan's milestones and the smoke test in section 8.6.
+
+---
+
+## 10. Change Log
+
+Decisions made during the build that change or refine this specification. Each one is also applied in place above.
+
+| Date | Milestone | Change | Sections |
+| --- | --- | --- | --- |
+| 2026-11-13 | B1 planning | Domain models live in `DomainModels/` (namespace `NotificationPlatform.Domain.DomainModels`), not `Entities/` | 6.1 |
+| 2026-11-14 | B1.1 | .NET 10 SDK pinned with `BE/global.json` | 7 |
+| 2026-11-15 | B1.2 | Options classes are added in the milestone that uses them. Only `MongoOptions` exists after B1 | 3 |
+| 2026-11-15 | B1.2 | Index creation runs right after `Build()` in `Program.cs`, inside one try/catch that logs and continues | 4 |
+| 2026-11-15 | B1.2 | `INotificationDataAccess` gains `MarkProcessingAsync(id, attempt)`. `UpdateStatusAsync` signature fixed as `(id, status, lastError, deliveredAt)`. `ListAsync` returns `(Items, Total)`. All abstraction methods take `CancellationToken ct = default` | 6.2, 6.4 |
+| 2026-11-15 | B1.2 | `MongoContext.GetCollection<T>()` with collection name = camelCase type name + "s". Generic `MongoDataAccessBase<T>` base class for all Mongo DALs. BSON mapping by conventions only (camelCase, ignore extra elements), ids by driver defaults | 6.3 |
+| 2026-11-15 | B1.2 | `DeliveryProcessor` doesn't pass the cancellation token to the bookkeeping writes after a successful send | 6.4 |
+| 2026-11-15 | B1.2 | docker-compose: `mongo:8`, bound to `127.0.0.1` only, named volume `mongo-data` | 7 |
