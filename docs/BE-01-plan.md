@@ -153,6 +153,8 @@ BE/
 │   ├── NotificationPlatform.Api/                 host 1: HTTP (Lambda + Kestrel)
 │   │   ├── Controllers/                          Auth, Tenants, Notifications, Dashboard, Health
 │   │   ├── Auth/                                 ApiKeyAuthenticationHandler, ClaimsPrincipalExtensions
+│   │   ├── Middleware/                           ExceptionHandlingMiddleware
+│   │   ├── Validation/                           ValidationErrorResponse, ErrorStatusCodePages
 │   │   ├── Queue/                                LocalNotificationQueue, LocalDeliveryWorker
 │   │   ├── DTOs/                                 request and response types
 │   │   └── Program.cs                            composition root
@@ -222,3 +224,4 @@ Decisions made during the build that change or refine this plan. Each one is als
 | 2026-11-13 | B1 planning | Domain folder is `DomainModels/` (namespace `NotificationPlatform.Domain.DomainModels`) instead of `Entities/` | 6.2, 6.4 |
 | 2026-11-14 | B1.1 | `global.json` pins SDK 10.0.x. Classic `.sln` format. Microsoft packages pinned to the 10.0.x line (10.0.15). Extra framework-only `Microsoft.Extensions.*` packages allowed in Services, DataAccess and Integrations. Worker `.csproj` has the Lambda build properties | 4 |
 | 2026-11-15 | B1.2 | DataAccess gains `MongoOptions`, `MongoMappings` (conventions, no class maps) and the generic `MongoDataAccessBase<T>`. `MongoContext` exposes `GetCollection<T>()` instead of one property per collection | 6.2, 6.4 |
+| 2026-11-15 | B1.3 | Api gains `Middleware/` (exception handling) and `Validation/` (validation error factory, status code pages) folders | 6.2 |

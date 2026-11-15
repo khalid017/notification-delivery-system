@@ -20,7 +20,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
   Domain entities and status constants. The five interfaces in `Services/Abstractions`. In DataAccess: `MongoContext`, `MongoIndexInitializer` (indexes from BE-02 section 4), `AddDataAccess(config)`. Root `docker-compose.yml` with MongoDB only.
   *Done when:* `docker compose up` starts Mongo and the indexes are created on API startup.
 
-- [ ] **B1.3 API host skeleton**
+- [x] **B1.3 API host skeleton**
   `Program.cs` composition root with options classes validated at startup, global exception middleware, the `Error` response shape for validation failures, camelCase JSON, `api` route prefix, and the Health controller. Fixed local port 5080.
   *Done when:* `GET /api/health` returns `200 { status: "ok" }` locally.
 

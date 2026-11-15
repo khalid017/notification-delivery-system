@@ -226,6 +226,20 @@ Error             { error: "message", fields?: { fieldName: ["message", ...] } }
 
 **Error shape.** Every error response uses the `Error` shape. Validation failures return `400` with `error: "Validation failed"` and a `fields` object keyed by camelCase field name. Configure `ApiBehaviorOptions.InvalidModelStateResponseFactory` so that `[ApiController]` model validation produces this shape instead of the default ProblemDetails. An unhandled exception returns `500` with `{ error: "Something went wrong" }` through global exception-handling middleware, and the details go to the logs only.
 
+How every error gets this shape (decided in B1.3):
+
+| Error | Produced by |
+| --- | --- |
+| Validation `400` | `ApiBehaviorOptions.InvalidModelStateResponseFactory` (`Validation/ValidationErrorResponse.cs`) |
+| Unhandled exception `500` | `Middleware/ExceptionHandlingMiddleware.cs`, registered first. If the client disconnected (`RequestAborted`), it logs and writes nothing. If the response already started, it rethrows |
+| Bodiless `4xx`: `401`/`403` from the authentication handlers, unknown route `404`, `405`, a controller's `NotFound()` | `SuppressMapClientErrors = true` (so `[ApiController]` doesn't turn them into ProblemDetails) plus `app.UseStatusCodePages(...)` (`Validation/ErrorStatusCodePages.cs`) with fixed messages: "Unauthorized", "Forbidden", "Not found", "Method not allowed" |
+| Errors with a specific message (`409` duplicate email, `401` "Incorrect email or password.", `503` enqueue failure) | The controller returns `ErrorResponse` itself |
+
+`fields` details:
+- Keys are camelCase field names. DataAnnotations errors (keyed by property name, `Password`) and JSON errors (keyed by JSON path, `$.password`) are both normalised to `password`. A missing or unreadable body is reported under `body`.
+- Raw JSON parser messages are not returned (`AllowInputFormatterExceptionMessages = false`), because they contain internal type names. A type mismatch or malformed JSON shows "The value is invalid." under the affected field.
+- When the body is missing or unreadable, the extra "The request field is required." error for the action parameter is dropped.
+
 ### 5.2 Auth
 
 | Method | Path | Auth | Description |
@@ -261,7 +275,7 @@ Error             { error: "message", fields?: { fieldName: ["message", ...] } }
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| GET | `/health` | none | Returns `200 { status: "ok" }`. Used for smoke tests |
+| GET | `/health` | none | Returns `200 { status: "ok" }`. Used for smoke tests. Doesn't check the database |
 
 ### 5.7 Validation rules
 
@@ -339,7 +353,7 @@ Callers:
 
 ### 6.5 Api and Worker
 
-- **Api `Program.cs`:** the composition root. Calls `AddServices()`, `AddDataAccess(config)`, `AddIntegrations(config)`, configures both authentication schemes, the global exception middleware and the validation error shape, chooses the queue (SQS if `Queue__Url` is set, otherwise the local queue and worker), calls `AddAWSLambdaHosting(LambdaEventSource.HttpApi)`, and kicks off index creation.
+- **Api `Program.cs`:** the composition root. Calls `AddServices()`, `AddDataAccess(config)`, `AddIntegrations(config)`, configures both authentication schemes, the global exception middleware and the validation error shape, chooses the queue (SQS if `Queue__Url` is set, otherwise the local queue and worker), calls `AddAWSLambdaHosting(LambdaEventSource.HttpApi)`, and kicks off index creation. Pipeline order: `ExceptionHandlingMiddleware` → `UseStatusCodePages` → `UseAuthentication` (B2) → `UseAuthorization` → `MapControllers`. `AddAWSLambdaHosting` is wired from B1.3 (it has no effect under Kestrel). The local port is fixed at **5080** in `Properties/launchSettings.json`.
 - **Worker `Function.cs`:** builds the service provider once in a static constructor (so it is reused between invocations) and exposes `FunctionHandler(SQSEvent, ILambdaContext)`.
 
 ---
@@ -451,3 +465,7 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-15 | B1.2 | `MongoContext.GetCollection<T>()` with collection name = camelCase type name + "s". Generic `MongoDataAccessBase<T>` base class for all Mongo DALs. BSON mapping by conventions only (camelCase, ignore extra elements), ids by driver defaults | 6.3 |
 | 2026-11-15 | B1.2 | `DeliveryProcessor` doesn't pass the cancellation token to the bookkeeping writes after a successful send | 6.4 |
 | 2026-11-15 | B1.2 | docker-compose: `mongo:8`, bound to `127.0.0.1` only, named volume `mongo-data` | 7 |
+| 2026-11-15 | B1.3 | Keep the custom `{ error, fields }` shape (not ProblemDetails) and guarantee it for every error: validation factory, exception middleware, `SuppressMapClientErrors` + `UseStatusCodePages` for bodiless 4xx, explicit `ErrorResponse` for specific messages | 5.1 |
+| 2026-11-15 | B1.3 | `fields` keys normalised to camelCase (`$.password`/`Password` → `password`, missing body → `body`). Raw JSON parser messages hidden. Parameter-level "required" noise dropped | 5.1 |
+| 2026-11-15 | B1.3 | Exception middleware ignores client disconnects and rethrows if the response has started | 5.1 |
+| 2026-11-15 | B1.3 | Health doesn't check the database. Pipeline order fixed. Lambda hosting wired now. Port 5080 | 5.6, 6.5 |
