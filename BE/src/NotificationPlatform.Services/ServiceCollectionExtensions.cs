@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<TokenService>();
         services.AddSingleton<ApiKeyService>();
+        services.AddScoped<AuthService>();
 
         return services;
     }

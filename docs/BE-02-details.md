@@ -84,7 +84,9 @@ Two patterns for two kinds of caller.
 
 - `POST /api/auth/register` and `POST /api/auth/login` return `{ token, expiresAt, tenant }`. Registration also returns the new API key, **once**.
 - The token is HS256, signed with `Jwt__Secret` (at least 32 characters). Fixed issuer and audience strings in code. Claims: `sub` (tenant id), `tenant_id` (the same value, read by `User.GetTenantId()`), `email`, `name`, `exp`.
-- Passwords are hashed with BCrypt.
+- Passwords are hashed with BCrypt. Implementation (B2.2): `BCrypt.EnhancedHashPassword` / `EnhancedVerify` (work factor 11). The enhanced variant pre-hashes with SHA-384, because plain BCrypt ignores everything after 72 bytes and passwords may be up to 100 characters.
+- Email is trimmed and lowercased on register and login. Name is trimmed.
+- Login with an unknown email still runs one BCrypt verify against a fixed dummy hash, so a failed login takes the same time whether or not the email exists.
 - There is no refresh endpoint and no logout endpoint. When the token expires, or the API returns `401`, the dashboard sends the user to the login page. Logging out means the browser deletes the token.
 - Set `ClockSkew` on the validation parameters to 30 seconds. The default is 5 minutes, which would let an expired token keep working for 5 more minutes.
 - Implementation (B2.1):
@@ -105,7 +107,8 @@ Use the built-in authentication system with **two schemes**:
 
 - **`Bearer`** (default scheme): `AddJwtBearer`, with `MapInboundClaims = false` so claim names stay as written. Controllers use `[Authorize]`.
 - **`ApiKey`**: a small custom `AuthenticationHandler` in the Api project. It reads `X-API-Key`, hashes it with SHA-256, looks up the tenant through `ITenantDataAccess`, and builds the principal. The notifications controller uses `[Authorize(AuthenticationSchemes = "ApiKey")]`.
-- Both schemes add a `tenant_id` claim. A helper `User.GetTenantId()` (an extension method on `ClaimsPrincipal`) reads it.
+- Both schemes add a `tenant_id` claim. A helper `User.GetTenantId()` (an extension method on `ClaimsPrincipal`, in `Api/Auth/ClaimsPrincipalExtensions.cs`, created in B2.2 because `/auth/me` needs it) reads it.
+- Bearer setup (B2.2): `AddJwtBearer()` is configured through `AddOptions<JwtBearerOptions>(...).Configure<TokenService>(...)`, so it takes `TokenService.CreateValidationParameters()` from DI. A missing, malformed, expired or tampered token gives `401 { "error": "Unauthorized" }` (with a `WWW-Authenticate: Bearer` header).
 - **A controller never takes the tenant id from the request body or query string.** Every query is scoped to the authenticated tenant.
 - Compare hashes with `CryptographicOperations.FixedTimeEquals`.
 
@@ -250,9 +253,9 @@ How every error gets this shape (decided in B1.3):
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| POST | `/auth/register` | none | Body `{ name, email, password }`. Create tenant and API key. Returns `RegisterResponse`. Duplicate email returns `409` |
-| POST | `/auth/login` | none | Body `{ email, password }`. Returns `AuthResponse`. Wrong credentials return `401` with the message "Incorrect email or password." (same message for unknown email and wrong password) |
-| GET | `/auth/me` | Bearer | Returns `Tenant` |
+| POST | `/auth/register` | none | Body `{ name, email, password }`. Create tenant and API key. Returns `200 RegisterResponse`. Duplicate email (case-insensitive) returns `409` with "An account with this email already exists." |
+| POST | `/auth/login` | none | Body `{ email, password }` (both required). Returns `200 AuthResponse`. Wrong credentials return `401` with the message "Incorrect email or password." (same message for unknown email and wrong password) |
+| GET | `/auth/me` | Bearer | Returns `Tenant`. A valid token whose tenant no longer exists returns `401` |
 
 ### 5.3 Tenant
 
@@ -311,26 +314,30 @@ Plain domain models `Tenant`, `Notification`, `DeliveryLog` in the `DomainModels
 
 | Class | Responsibility |
 | --- | --- |
-| `AuthService` | Register (create tenant, hash password, generate API key), login (verify password, issue token), get current tenant |
+| `AuthService` | Register (create tenant, hash password, generate API key), login (verify password, issue token), get current tenant. `RegisterAsync` returns `RegisteredTenant(Tenant, Token, ApiKey)` or null when the email is taken. `LoginAsync` returns `AuthSession(Tenant, Token)` or null for wrong credentials. `GetTenantAsync` |
 | `TokenService` | Create and describe the JWT (`CreateToken`, `CreateValidationParameters`). Reads `JwtOptions` and `TimeProvider` |
 | `ApiKeyService` | Generate a key, compute its SHA-256 hash and display prefix (`Generate`, `Hash`), regenerate for a tenant (added in B4.2) |
-
-`AddServices()` registers `TimeProvider.System` (with `TryAddSingleton`, so tests or hosts can replace it), `TokenService` and `ApiKeyService` as singletons. They are stateless and thread-safe.
 | `NotificationService` | Create a notification, enqueue it, list and get notifications for a tenant. Handles the enqueue-failure case from section 1.3 |
 | `DashboardService` | Stats (four count queries by status), paged list with status filter, detail with delivery attempts |
 | `DeliveryProcessor` | Delivers one notification (see 6.4) |
+
+**Registrations and lifetimes.** `AddServices()` registers `TimeProvider.System` (with `TryAddSingleton`, so tests or hosts can replace it), `TokenService` and `ApiKeyService` as singletons (stateless, thread-safe), and `AuthService` as scoped (one per request). `AddDataAccess()` registers the data access classes as singletons (no state, and Mongo collections are thread-safe).
+
+**Expected outcomes are return values, not exceptions.** A taken email or wrong credentials come back as `null`, and the controller maps them to `409` / `401`. Exceptions are for the unexpected, and become `500` in the middleware.
+
+**Timestamps.** Stored timestamps come from `TimeProvider.GetUtcNow().UtcDateTime`, unrounded. MongoDB keeps milliseconds, so a value returned right after saving (e.g. `createdAt` in the register response, `…12.5831445Z`) can carry more digits than the same value read back later (`…12.583Z`). This is accepted: the dashboard formats dates for display, so the difference is never visible.
 
 **Abstractions** (in `Services/Abstractions`):
 
 | Interface | Methods (indicative) |
 | --- | --- |
-| `ITenantDataAccess` | `GetByIdAsync`, `GetByEmailAsync`, `GetByApiKeyHashAsync`, `InsertAsync`, `UpdateApiKeyAsync` |
+| `ITenantDataAccess` | `GetByIdAsync`, `GetByEmailAsync` (exact match on the normalised email), `GetByApiKeyHashAsync`, `InsertAsync` (returns `false` when the email is already registered: DataAccess translates the unique-index duplicate-key error, so the check is race-free and Services never sees a Mongo type), `UpdateApiKeyAsync` |
 | `INotificationDataAccess` | `InsertAsync`, `GetByIdAsync(tenantId, id)`, `GetByIdForProcessingAsync(id)`, `MarkProcessingAsync(id, attempt)` (status `processing`, `attempts`, `updatedAt`), `UpdateStatusAsync(id, status, lastError, deliveredAt)` (sets all three plus `updatedAt`; a null `lastError` clears it), `ListAsync(tenantId, status, page, pageSize)` returning `(Items, Total)` newest first, `CountByStatusAsync(tenantId, status)` |
 | `IDeliveryLogDataAccess` | `InsertAsync`, `GetByNotificationAsync(notificationId)` (oldest first) |
-| `IEmailSender` | `SendAsync(to, subject, body, ct)` |
-| `INotificationQueue` | `EnqueueAsync(notificationId, ct)` |
+| `IEmailSender` | `SendAsync(to, subject, body, cancellationToken)` |
+| `INotificationQueue` | `EnqueueAsync(notificationId, cancellationToken)` |
 
-Every method is async and takes `CancellationToken ct = default` as its last parameter, so cancellation (an aborted HTTP request, host shutdown) can flow from the controller or worker down to the MongoDB driver and AWS SDK. `InsertAsync` methods set the model's `Id`.
+Every method is async and takes `CancellationToken cancellationToken = default` as its last parameter (always the full name, never `ct`), so cancellation (an aborted HTTP request, host shutdown) can flow from the controller or worker down to the MongoDB driver and AWS SDK. `InsertAsync` methods set the model's `Id`.
 
 ### 6.3 DataAccess and Integrations
 
@@ -345,7 +352,7 @@ Every method is async and takes `CancellationToken ct = default` as its last par
 
 ### 6.4 DeliveryProcessor
 
-`DeliveryProcessor.ProcessAsync(notificationId, attempt, maxAttempts, ct)` returns a result (`Delivered`, `Retry` or `FailedFinal`, plus the error) instead of throwing, so it is easy to test and each host decides what to do.
+`DeliveryProcessor.ProcessAsync(notificationId, attempt, maxAttempts, cancellationToken)` returns a result (`Delivered`, `Retry` or `FailedFinal`, plus the error) instead of throwing, so it is easy to test and each host decides what to do.
 
 1. Load the notification. If it doesn't exist, return `Delivered` (nothing to do). If its status is already `delivered`, return `Delivered`. This makes duplicate SQS deliveries harmless.
 2. Set status `processing` and `attempts = attempt` (`MarkProcessingAsync`).
@@ -469,7 +476,7 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-14 | B1.1 | .NET 10 SDK pinned with `BE/global.json` | 7 |
 | 2026-11-15 | B1.2 | Options classes are added in the milestone that uses them. Only `MongoOptions` exists after B1 | 3 |
 | 2026-11-15 | B1.2 | Index creation runs right after `Build()` in `Program.cs`, inside one try/catch that logs and continues | 4 |
-| 2026-11-15 | B1.2 | `INotificationDataAccess` gains `MarkProcessingAsync(id, attempt)`. `UpdateStatusAsync` signature fixed as `(id, status, lastError, deliveredAt)`. `ListAsync` returns `(Items, Total)`. All abstraction methods take `CancellationToken ct = default` | 6.2, 6.4 |
+| 2026-11-15 | B1.2 | `INotificationDataAccess` gains `MarkProcessingAsync(id, attempt)`. `UpdateStatusAsync` signature fixed as `(id, status, lastError, deliveredAt)`. `ListAsync` returns `(Items, Total)`. All abstraction methods take `CancellationToken cancellationToken = default` | 6.2, 6.4 |
 | 2026-11-15 | B1.2 | `MongoContext.GetCollection<T>()` with collection name = camelCase type name + "s". Generic `MongoDataAccessBase<T>` base class for all Mongo DALs. BSON mapping by conventions only (camelCase, ignore extra elements), ids by driver defaults | 6.3 |
 | 2026-11-15 | B1.2 | `DeliveryProcessor` doesn't pass the cancellation token to the bookkeeping writes after a successful send | 6.4 |
 | 2026-11-15 | B1.2 | docker-compose: `mongo:8`, bound to `127.0.0.1` only, named volume `mongo-data` | 7 |
@@ -480,3 +487,9 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-16 | B2.1 | Issuer/audience constants on `JwtOptions`. Tokens built with `JsonWebTokenHandler`. `CreateValidationParameters()` shared by `AddJwtBearer` and tests, with HS256 pinned. Times from `TimeProvider`, truncated to whole seconds | 2.1, 6.2 |
 | 2026-11-16 | B2.1 | `JwtOptions` bound and validated in the Api host only, because the Worker has no JWT secret | 2.1 |
 | 2026-11-16 | B2.1 | `ApiKeyService.Generate()` returns `GeneratedApiKey(Key, Hash, Prefix)`. Hash is lowercase hex | 2.2 |
+| 2026-11-16 | B2.2 | Naming rule: method parameters get full names (`cancellationToken`, not `ct`). Short lambda parameters (`n => n.TenantId`) are fine. Existing code and doc signatures updated | 6.2, 6.4 |
+| 2026-11-16 | B2.2 | `ITenantDataAccess.InsertAsync` returns `bool` (false = email taken), decided by the unique index | 6.2 |
+| 2026-11-16 | B2.2 | `AuthService` returns `RegisteredTenant` / `AuthSession` or null. BCrypt enhanced variant. Email trimmed and lowercased. Dummy-hash verify for unknown emails | 2.1, 6.2 |
+| 2026-11-16 | B2.2 | Register returns 200. Error messages for 409 and 401 fixed. `/auth/me` returns 401 if the tenant no longer exists | 5.2 |
+| 2026-11-16 | B2.2 | `User.GetTenantId()` created in B2.2. Bearer configured from `TokenService` through DI | 2.3 |
+| 2026-11-16 | B2.2 | Lifetimes: data access singletons, `AuthService` scoped. Timestamps are not rounded to MongoDB's millisecond precision (a millisecond-rounding helper was judged overkill and removed) | 6.2 |

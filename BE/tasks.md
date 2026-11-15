@@ -30,7 +30,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
   `TokenService` (HS256, claims `sub`, `tenant_id`, `email`, `name`, `exp`), `JwtOptions`, `ApiKeyService` (`np_` key, SHA-256 hash, display prefix). Unit tests per BE-02 section 9.
   *Done when:* the `TokenService` and `ApiKeyService` tests pass.
 
-- [ ] **B2.2 Auth service and endpoints**
+- [x] **B2.2 Auth service and endpoints**
   `AuthService` with BCrypt, `TenantDataAccess`, and the Auth controller (`register`, `login`, `me`). JWT bearer scheme with 30 second clock skew and `MapInboundClaims = false`. Validation rules from BE-02 section 5.7. Unit tests for `AuthService`.
   *Done when:* register returns a token and an API key, `/auth/me` works with the token and returns 401 without it, a wrong password returns 401, a short password returns 400 with field errors, and a duplicate email returns 409.
 

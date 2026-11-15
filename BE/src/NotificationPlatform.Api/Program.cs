@@ -1,9 +1,11 @@
 using Amazon.Lambda.AspNetCoreServer.Hosting;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using NotificationPlatform.Api.Middleware;
 using NotificationPlatform.Api.Validation;
 using NotificationPlatform.DataAccess;
 using NotificationPlatform.Integrations;
 using NotificationPlatform.Services;
+using NotificationPlatform.Services.Auth;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,7 +15,21 @@ builder.Services
     .AddDataAccess(builder.Configuration)
     .AddIntegrations(builder.Configuration);
 
-// B2: authentication schemes (Bearer default + ApiKey).
+// Dashboard JWT settings. Bound here, not in AddServices(), because the Worker has no JWT secret.
+builder.Services.AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
+// Authentication. "Bearer" (dashboard JWT) is the default scheme. B2.3 adds the "ApiKey" scheme.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<TokenService>((options, tokenService) =>
+    {
+        options.MapInboundClaims = false; // keep "sub" and "tenant_id" as written, not mapped to long URIs
+        options.TokenValidationParameters = tokenService.CreateValidationParameters(); // one definition (B2.1)
+    });
+
 // B3.2 / B5.1: queue selection (SQS when Queue:Url is set, otherwise the local queue and worker).
 
 // Controllers. System.Text.Json uses camelCase by default.
@@ -36,8 +52,8 @@ await app.Services.GetRequiredService<MongoIndexInitializer>().EnsureIndexesAsyn
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();        // unhandled exception -> 500 Error shape
 app.UseStatusCodePages(ErrorStatusCodePages.WriteAsync); // bodiless 4xx -> Error shape
-// B2: app.UseAuthentication();
-app.UseAuthorization();
+app.UseAuthentication(); // who is calling (builds HttpContext.User)
+app.UseAuthorization();  // may they call this endpoint ([Authorize])
 
 app.MapControllers();
 

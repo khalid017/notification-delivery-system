@@ -11,46 +11,46 @@ namespace NotificationPlatform.DataAccess;
 /// </summary>
 public class MongoIndexInitializer(MongoContext context, ILogger<MongoIndexInitializer> logger)
 {
-    public async Task EnsureIndexesAsync(CancellationToken ct = default)
+    public async Task EnsureIndexesAsync(CancellationToken cancellationToken = default)
     {
         try
         {
             await context.GetCollection<Tenant>().Indexes.CreateOneAsync(
                 new CreateIndexModel<Tenant>(
-                    Builders<Tenant>.IndexKeys.Ascending(t => t.Email),
+                    Builders<Tenant>.IndexKeys.Ascending(tenant => tenant.Email),
                     new CreateIndexOptions { Unique = true }),
-                cancellationToken: ct);
+                cancellationToken: cancellationToken);
 
             await context.GetCollection<Tenant>().Indexes.CreateOneAsync(
                 new CreateIndexModel<Tenant>(
-                    Builders<Tenant>.IndexKeys.Ascending(t => t.ApiKeyHash),
+                    Builders<Tenant>.IndexKeys.Ascending(tenant => tenant.ApiKeyHash),
                     new CreateIndexOptions { Unique = true }),
-                cancellationToken: ct);
+                cancellationToken: cancellationToken);
 
             await context.GetCollection<Notification>().Indexes.CreateOneAsync(
                 new CreateIndexModel<Notification>(
                     Builders<Notification>.IndexKeys
-                        .Ascending(n => n.TenantId)
-                        .Descending(n => n.CreatedAt)),
-                cancellationToken: ct);
+                        .Ascending(notification => notification.TenantId)
+                        .Descending(notification => notification.CreatedAt)),
+                cancellationToken: cancellationToken);
 
             await context.GetCollection<Notification>().Indexes.CreateOneAsync(
                 new CreateIndexModel<Notification>(
                     Builders<Notification>.IndexKeys
-                        .Ascending(n => n.TenantId)
-                        .Ascending(n => n.Status)),
-                cancellationToken: ct);
+                        .Ascending(notification => notification.TenantId)
+                        .Ascending(notification => notification.Status)),
+                cancellationToken: cancellationToken);
 
             await context.GetCollection<DeliveryLog>().Indexes.CreateOneAsync(
                 new CreateIndexModel<DeliveryLog>(
-                    Builders<DeliveryLog>.IndexKeys.Ascending(d => d.NotificationId)),
-                cancellationToken: ct);
+                    Builders<DeliveryLog>.IndexKeys.Ascending(deliveryLog => deliveryLog.NotificationId)),
+                cancellationToken: cancellationToken);
 
             logger.LogInformation("MongoDB indexes ensured");
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            logger.LogError(ex, "Failed to create MongoDB indexes");
+            logger.LogError(exception, "Failed to create MongoDB indexes");
         }
     }
 }

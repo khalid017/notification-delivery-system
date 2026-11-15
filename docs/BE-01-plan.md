@@ -225,3 +225,4 @@ Decisions made during the build that change or refine this plan. Each one is als
 | 2026-11-14 | B1.1 | `global.json` pins SDK 10.0.x. Classic `.sln` format. Microsoft packages pinned to the 10.0.x line (10.0.15). Extra framework-only `Microsoft.Extensions.*` packages allowed in Services, DataAccess and Integrations. Worker `.csproj` has the Lambda build properties | 4 |
 | 2026-11-15 | B1.2 | DataAccess gains `MongoOptions`, `MongoMappings` (conventions, no class maps) and the generic `MongoDataAccessBase<T>`. `MongoContext` exposes `GetCollection<T>()` instead of one property per collection | 6.2, 6.4 |
 | 2026-11-15 | B1.3 | Api gains `Middleware/` (exception handling) and `Validation/` (validation error factory, status code pages) folders | 6.2 |
+| 2026-11-16 | B2.2 | Code convention: method parameters get full names (`cancellationToken`, not `ct`). Short lambda parameters (`n => n.TenantId`) are fine | 6.4 |

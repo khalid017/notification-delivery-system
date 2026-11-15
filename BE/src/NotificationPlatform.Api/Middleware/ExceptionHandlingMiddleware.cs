@@ -20,9 +20,9 @@ public class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Exception
             logger.LogInformation("Request {Method} {Path} was cancelled by the client",
                 context.Request.Method, context.Request.Path);
         }
-        catch (Exception ex)
+        catch (Exception exception)
         {
-            logger.LogError(ex, "Unhandled exception for {Method} {Path}",
+            logger.LogError(exception, "Unhandled exception for {Method} {Path}",
                 context.Request.Method, context.Request.Path);
 
             if (context.Response.HasStarted)
