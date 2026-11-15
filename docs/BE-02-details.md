@@ -87,11 +87,17 @@ Two patterns for two kinds of caller.
 - Passwords are hashed with BCrypt.
 - There is no refresh endpoint and no logout endpoint. When the token expires, or the API returns `401`, the dashboard sends the user to the login page. Logging out means the browser deletes the token.
 - Set `ClockSkew` on the validation parameters to 30 seconds. The default is 5 minutes, which would let an expired token keep working for 5 more minutes.
+- Implementation (B2.1):
+  - Issuer `notification-platform` and audience `notification-platform-dashboard` are constants on `JwtOptions`. Both are validated.
+  - `TokenService.CreateToken(tenant)` returns `IssuedToken(Token, ExpiresAt)`, built with `JsonWebTokenHandler` (the handler `JwtBearer` validates with; it ships in the `System.IdentityModel.Tokens.Jwt` package). Times come from an injected `TimeProvider` and are truncated to whole seconds, so `expiresAt` equals the token's `exp`.
+  - `TokenService.CreateValidationParameters()` is the single definition of how tokens are validated: issuer, audience, lifetime, signing key, `ClockSkew` 30 s, and `ValidAlgorithms = [HS256]` (pinning the algorithm blocks `alg: none` and algorithm-confusion attacks). `AddJwtBearer` uses it in B2.2, and the unit tests use it too.
+  - `JwtOptions` (`[Required, MinLength(32)] Secret`, `[Range(1, 1440)] ExpiryMinutes = 60`) is bound and validated in the **Api host only**, not in `AddServices()`, because the Worker also calls `AddServices()` and has no `Jwt__Secret`.
 
 ### 2.2 API key
 
 - Format: `np_` followed by 32 random bytes encoded as base64url.
 - Stored: the SHA-256 hex hash (`apiKeyHash`) and a short display prefix (`apiKeyPrefix`, `np_` plus the first 8 characters of the random part). The full key is never stored and is shown to the tenant only once, at registration or regeneration.
+- Implementation (B2.1): `ApiKeyService.Generate()` returns `GeneratedApiKey(Key, Hash, Prefix)`. The random part is `Base64Url.EncodeToString(RandomNumberGenerator.GetBytes(32))` (43 characters, no padding, so a key is 46 characters). `ApiKeyService.Hash(key)` is SHA-256 of the full key including `np_`, as 64 **lowercase** hex characters.
 
 ### 2.3 Implementation in ASP.NET Core
 
@@ -306,8 +312,10 @@ Plain domain models `Tenant`, `Notification`, `DeliveryLog` in the `DomainModels
 | Class | Responsibility |
 | --- | --- |
 | `AuthService` | Register (create tenant, hash password, generate API key), login (verify password, issue token), get current tenant |
-| `TokenService` | Create and describe the JWT. Reads `JwtOptions` |
-| `ApiKeyService` | Generate a key, compute its SHA-256 hash and display prefix, regenerate for a tenant |
+| `TokenService` | Create and describe the JWT (`CreateToken`, `CreateValidationParameters`). Reads `JwtOptions` and `TimeProvider` |
+| `ApiKeyService` | Generate a key, compute its SHA-256 hash and display prefix (`Generate`, `Hash`), regenerate for a tenant (added in B4.2) |
+
+`AddServices()` registers `TimeProvider.System` (with `TryAddSingleton`, so tests or hosts can replace it), `TokenService` and `ApiKeyService` as singletons. They are stateless and thread-safe.
 | `NotificationService` | Create a notification, enqueue it, list and get notifications for a tenant. Handles the enqueue-failure case from section 1.3 |
 | `DashboardService` | Stats (four count queries by status), paged list with status filter, detail with delivery attempts |
 | `DeliveryProcessor` | Delivers one notification (see 6.4) |
@@ -469,3 +477,6 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-15 | B1.3 | `fields` keys normalised to camelCase (`$.password`/`Password` → `password`, missing body → `body`). Raw JSON parser messages hidden. Parameter-level "required" noise dropped | 5.1 |
 | 2026-11-15 | B1.3 | Exception middleware ignores client disconnects and rethrows if the response has started | 5.1 |
 | 2026-11-15 | B1.3 | Health doesn't check the database. Pipeline order fixed. Lambda hosting wired now. Port 5080 | 5.6, 6.5 |
+| 2026-11-16 | B2.1 | Issuer/audience constants on `JwtOptions`. Tokens built with `JsonWebTokenHandler`. `CreateValidationParameters()` shared by `AddJwtBearer` and tests, with HS256 pinned. Times from `TimeProvider`, truncated to whole seconds | 2.1, 6.2 |
+| 2026-11-16 | B2.1 | `JwtOptions` bound and validated in the Api host only, because the Worker has no JWT secret | 2.1 |
+| 2026-11-16 | B2.1 | `ApiKeyService.Generate()` returns `GeneratedApiKey(Key, Hash, Prefix)`. Hash is lowercase hex | 2.2 |

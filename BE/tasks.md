@@ -26,7 +26,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
 
 ## B2. Auth
 
-- [ ] **B2.1 Token and API key services**
+- [x] **B2.1 Token and API key services**
   `TokenService` (HS256, claims `sub`, `tenant_id`, `email`, `name`, `exp`), `JwtOptions`, `ApiKeyService` (`np_` key, SHA-256 hash, display prefix). Unit tests per BE-02 section 9.
   *Done when:* the `TokenService` and `ApiKeyService` tests pass.
 
