@@ -34,7 +34,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
   `AuthService` with BCrypt, `TenantDataAccess`, and the Auth controller (`register`, `login`, `me`). JWT bearer scheme with 30 second clock skew and `MapInboundClaims = false`. Validation rules from BE-02 section 5.7. Unit tests for `AuthService`.
   *Done when:* register returns a token and an API key, `/auth/me` works with the token and returns 401 without it, a wrong password returns 401, a short password returns 400 with field errors, and a duplicate email returns 409.
 
-- [ ] **B2.3 API key authentication**
+- [x] **B2.3 API key authentication**
   `ApiKeyAuthenticationHandler` (scheme `ApiKey`, fixed-time hash comparison) and the `User.GetTenantId()` extension.
   *Done when:* a temporary protected endpoint accepts a valid `X-API-Key` and returns 401 for a missing or wrong key.
 

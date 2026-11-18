@@ -20,6 +20,7 @@ public class ApiKeyService
     public const string KeyPrefix = "np_";
     private const int RandomBytes = 32;
     private const int DisplayChars = 8;
+    private const int KeyLength = 46; // "np_" + 43 base64url characters
 
     public GeneratedApiKey Generate()
     {
@@ -31,4 +32,17 @@ public class ApiKeyService
 
     /// <summary>SHA-256 of the full key (including <c>np_</c>), as 64 lowercase hex characters.</summary>
     public string Hash(string apiKey) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
+
+    /// <summary>Cheap shape check (prefix and length), so obviously invalid keys are rejected without a database call.</summary>
+    public bool HasValidFormat(string apiKey) =>
+        apiKey.Length == KeyLength && apiKey.StartsWith(KeyPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether <paramref name="apiKey"/> hashes to <paramref name="storedHash"/>, compared in constant time
+    /// so the comparison's duration doesn't reveal how many characters matched.
+    /// </summary>
+    public bool Matches(string apiKey, string storedHash) =>
+        CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(Hash(apiKey)),
+            Encoding.UTF8.GetBytes(storedHash));
 }

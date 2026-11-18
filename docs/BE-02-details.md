@@ -111,6 +111,14 @@ Use the built-in authentication system with **two schemes**:
 - Bearer setup (B2.2): `AddJwtBearer()` is configured through `AddOptions<JwtBearerOptions>(...).Configure<TokenService>(...)`, so it takes `TokenService.CreateValidationParameters()` from DI. A missing, malformed, expired or tampered token gives `401 { "error": "Unauthorized" }` (with a `WWW-Authenticate: Bearer` header).
 - **A controller never takes the tenant id from the request body or query string.** Every query is scoped to the authenticated tenant.
 - Compare hashes with `CryptographicOperations.FixedTimeEquals`.
+- ApiKey handler (B2.3, `Api/Auth/ApiKeyAuthenticationHandler.cs`, constants `SchemeName = "ApiKey"`, `HeaderName = "X-API-Key"`), registered with `AddScheme<...>` after `AddJwtBearer()`. Bearer stays the default scheme. Steps:
+  1. No or empty header → `NoResult` (no credentials offered).
+  2. `ApiKeyService.HasValidFormat` fails (not `np_` + 43 characters) → `Fail`, without a database call.
+  3. `GetByApiKeyHashAsync(Hash(key), RequestAborted)`. A read, so cancelling on client disconnect is safe.
+  4. No tenant, or `ApiKeyService.Matches(key, tenant.ApiKeyHash)` false → `Fail`. `Matches` uses `FixedTimeEquals`. Since the lookup already matched on the hash and a caller controls the key, not its hash, this is defence in depth, kept in case the lookup ever changes.
+  5. Success → a principal with a single `tenant_id` claim.
+
+  `NoResult` and `Fail` both end in a bodiless 401, which the status code pages turn into `{ "error": "Unauthorized" }`. Failure messages never contain the key. A MongoDB error is not caught, so it becomes a 500 rather than a misleading 401. The schemes are not interchangeable: a JWT on an `ApiKey` endpoint, or an API key on a `Bearer` endpoint, gets 401.
 
 ---
 
@@ -316,7 +324,7 @@ Plain domain models `Tenant`, `Notification`, `DeliveryLog` in the `DomainModels
 | --- | --- |
 | `AuthService` | Register (create tenant, hash password, generate API key), login (verify password, issue token), get current tenant. `RegisterAsync` returns `RegisteredTenant(Tenant, Token, ApiKey)` or null when the email is taken. `LoginAsync` returns `AuthSession(Tenant, Token)` or null for wrong credentials. `GetTenantAsync` |
 | `TokenService` | Create and describe the JWT (`CreateToken`, `CreateValidationParameters`). Reads `JwtOptions` and `TimeProvider` |
-| `ApiKeyService` | Generate a key, compute its SHA-256 hash and display prefix (`Generate`, `Hash`), regenerate for a tenant (added in B4.2) |
+| `ApiKeyService` | Generate a key, compute its SHA-256 hash and display prefix (`Generate`, `Hash`), check a key's shape (`HasValidFormat`), compare a key to a stored hash in constant time (`Matches`), regenerate for a tenant (added in B4.2) |
 | `NotificationService` | Create a notification, enqueue it, list and get notifications for a tenant. Handles the enqueue-failure case from section 1.3 |
 | `DashboardService` | Stats (four count queries by status), paged list with status filter, detail with delivery attempts |
 | `DeliveryProcessor` | Delivers one notification (see 6.4) |
@@ -458,7 +466,7 @@ Unit tests live in `NotificationPlatform.Services.Tests` and use mocks of the Se
 | --- | --- |
 | `TokenService` | Token contains the expected claims and expiry. An expired or tampered token fails validation |
 | `AuthService` | Register hashes the password and generates an API key. Duplicate email fails. Login with a wrong password fails |
-| `ApiKeyService` | Generated keys have the `np_` prefix. The hash is deterministic. Two keys differ |
+| `ApiKeyService` | Generated keys have the `np_` prefix. The hash is deterministic. Two keys differ. Format check accepts generated keys and rejects malformed ones. `Matches` is true only for the key's own hash |
 | `NotificationService` | Creates a `queued` notification and enqueues its id. If enqueue fails, the notification is marked `failed` |
 | `DeliveryProcessor` | Success on first attempt. Failure then success. Final failure at the last attempt. Already-delivered notification is skipped |
 
@@ -493,3 +501,4 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-16 | B2.2 | Register returns 200. Error messages for 409 and 401 fixed. `/auth/me` returns 401 if the tenant no longer exists | 5.2 |
 | 2026-11-16 | B2.2 | `User.GetTenantId()` created in B2.2. Bearer configured from `TokenService` through DI | 2.3 |
 | 2026-11-16 | B2.2 | Lifetimes: data access singletons, `AuthService` scoped. Timestamps are not rounded to MongoDB's millisecond precision (a millisecond-rounding helper was judged overkill and removed) | 6.2 |
+| 2026-11-16 | B2.3 | ApiKey handler steps fixed: `NoResult` for a missing header, format check before any database call, lookup by hash, `Matches` (fixed-time) as defence in depth, single `tenant_id` claim. `ApiKeyService` gains `HasValidFormat` and `Matches` | 2.3, 6.2, 9 |

@@ -1,5 +1,7 @@
 using Amazon.Lambda.AspNetCoreServer.Hosting;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using NotificationPlatform.Api.Auth;
 using NotificationPlatform.Api.Middleware;
 using NotificationPlatform.Api.Validation;
 using NotificationPlatform.DataAccess;
@@ -21,8 +23,12 @@ builder.Services.AddOptions<JwtOptions>()
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
-// Authentication. "Bearer" (dashboard JWT) is the default scheme. B2.3 adds the "ApiKey" scheme.
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer();
+// Authentication. "Bearer" (dashboard JWT) is the default scheme, used by plain [Authorize].
+// "ApiKey" (third-party apps, X-API-Key header) is opted into per endpoint.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer()
+    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+        ApiKeyAuthenticationHandler.SchemeName, configureOptions: null);
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<TokenService>((options, tokenService) =>
     {

@@ -46,6 +46,31 @@ public class ApiKeyServiceTests
     }
 
     [Fact]
+    public void HasValidFormat_AcceptsGeneratedKey()
+    {
+        Assert.True(_service.HasValidFormat(_service.Generate().Key));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("np_short")]
+    [InlineData("xx_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]  // 46 chars, wrong prefix
+    [InlineData("np_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")] // 47 chars
+    public void HasValidFormat_RejectsMalformedKeys(string apiKey)
+    {
+        Assert.False(_service.HasValidFormat(apiKey));
+    }
+
+    [Fact]
+    public void Matches_TrueForOwnHash_FalseForAnotherKey()
+    {
+        var generated = _service.Generate();
+
+        Assert.True(_service.Matches(generated.Key, generated.Hash));
+        Assert.False(_service.Matches(_service.Generate().Key, generated.Hash));
+    }
+
+    [Fact]
     public void Generate_TwoKeysDiffer()
     {
         var first = _service.Generate();
