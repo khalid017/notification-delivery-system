@@ -38,7 +38,8 @@ public class MongoIndexInitializer(MongoContext context, ILogger<MongoIndexIniti
                 new CreateIndexModel<Notification>(
                     Builders<Notification>.IndexKeys
                         .Ascending(notification => notification.TenantId)
-                        .Ascending(notification => notification.Status)),
+                        .Ascending(notification => notification.Status)
+                        .Descending(notification => notification.CreatedAt)), // ESR: filtered list sorted by the index
                 cancellationToken: cancellationToken);
 
             await context.GetCollection<DeliveryLog>().Indexes.CreateOneAsync(

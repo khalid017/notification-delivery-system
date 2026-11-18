@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using NotificationPlatform.Services.Abstractions;
 
 namespace NotificationPlatform.DataAccess;
@@ -20,7 +21,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<MongoContext>();
         services.AddSingleton<MongoIndexInitializer>();
 
+        services.TryAddSingleton(TimeProvider.System); // for updatedAt; also registered by AddServices()
+
         services.AddSingleton<ITenantDataAccess, TenantDataAccess>();
+        services.AddSingleton<INotificationDataAccess, NotificationDataAccess>();
+        services.AddSingleton<IDeliveryLogDataAccess, DeliveryLogDataAccess>();
 
         return services;
     }

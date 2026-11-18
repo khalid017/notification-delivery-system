@@ -10,11 +10,14 @@ public interface INotificationDataAccess
     /// <summary>Tenant-scoped lookup. Returns null for an unknown id or another tenant's id.</summary>
     Task<Notification?> GetByIdAsync(string tenantId, string id, CancellationToken cancellationToken = default);
 
-    /// <summary>Lookup by id only, for the delivery worker.</summary>
-    Task<Notification?> GetByIdForProcessingAsync(string id, CancellationToken cancellationToken = default);
-
-    /// <summary>Sets status <c>processing</c>, <c>attempts</c> and <c>updatedAt</c>.</summary>
-    Task MarkProcessingAsync(string id, int attempt, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Claims the notification for one delivery attempt, atomically. Matches only when the status is
+    /// <c>queued</c> or <c>processing</c> and <c>attempts</c> is lower than <paramref name="attempt"/>;
+    /// then sets status <c>processing</c>, <c>attempts = attempt</c> and <c>updatedAt</c>.
+    /// Returns the updated notification, or null when there is nothing to do (unknown id, already
+    /// delivered or failed, or this attempt was already claimed by a duplicate message).
+    /// </summary>
+    Task<Notification?> TryClaimAsync(string id, int attempt, CancellationToken cancellationToken = default);
 
     /// <summary>Sets <c>status</c>, <c>lastError</c> (null clears it), <c>deliveredAt</c> and <c>updatedAt</c>.</summary>
     Task UpdateStatusAsync(string id, string status, string? lastError, DateTime? deliveredAt, CancellationToken cancellationToken = default);

@@ -40,7 +40,7 @@ Specs: `docs/BE-01-plan.md` (what and order) and `docs/BE-02-details.md` (how). 
 
 ## B3. Sending
 
-- [ ] **B3.1 Delivery processor**
+- [x] **B3.1 Delivery processor**
   `NotificationDataAccess`, `DeliveryLogDataAccess` and `DeliveryProcessor` (BE-02 section 6.4). Unit tests with a fake `IEmailSender`.
   *Done when:* tests pass for success, retry then success, final failure and the already-delivered skip.
 

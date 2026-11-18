@@ -204,7 +204,7 @@ Ids are strings (an ObjectId hex string). All timestamps are UTC.
 | tenants | `{ email: 1 }` unique | Login lookup, and duplicate email protection |
 | tenants | `{ apiKeyHash: 1 }` unique | API key lookup on every request |
 | notifications | `{ tenantId: 1, createdAt: -1 }` | Dashboard list |
-| notifications | `{ tenantId: 1, status: 1 }` | Stats and status filter |
+| notifications | `{ tenantId: 1, status: 1, createdAt: -1 }` | Stats counts, and the status-filtered list already sorted newest first (equality, sort, range order). A database that still has the older `{ tenantId: 1, status: 1 }` index needs it dropped once by hand: index creation never drops indexes |
 | deliveryLogs | `{ notificationId: 1 }` | Attempts per notification |
 
 ---
@@ -340,7 +340,7 @@ Plain domain models `Tenant`, `Notification`, `DeliveryLog` in the `DomainModels
 | Interface | Methods (indicative) |
 | --- | --- |
 | `ITenantDataAccess` | `GetByIdAsync`, `GetByEmailAsync` (exact match on the normalised email), `GetByApiKeyHashAsync`, `InsertAsync` (returns `false` when the email is already registered: DataAccess translates the unique-index duplicate-key error, so the check is race-free and Services never sees a Mongo type), `UpdateApiKeyAsync` |
-| `INotificationDataAccess` | `InsertAsync`, `GetByIdAsync(tenantId, id)`, `GetByIdForProcessingAsync(id)`, `MarkProcessingAsync(id, attempt)` (status `processing`, `attempts`, `updatedAt`), `UpdateStatusAsync(id, status, lastError, deliveredAt)` (sets all three plus `updatedAt`; a null `lastError` clears it), `ListAsync(tenantId, status, page, pageSize)` returning `(Items, Total)` newest first, `CountByStatusAsync(tenantId, status)` |
+| `INotificationDataAccess` | `InsertAsync`, `GetByIdAsync(tenantId, id)`, `TryClaimAsync(id, attempt)` (atomic claim for one delivery attempt, see 6.4; returns the updated notification or null), `UpdateStatusAsync(id, status, lastError, deliveredAt)` (sets all three plus `updatedAt`; a null `lastError` clears it), `ListAsync(tenantId, status, page, pageSize)` returning `(Items, Total)` newest first, `CountByStatusAsync(tenantId, status)` |
 | `IDeliveryLogDataAccess` | `InsertAsync`, `GetByNotificationAsync(notificationId)` (oldest first) |
 | `IEmailSender` | `SendAsync(to, subject, body, cancellationToken)` |
 | `INotificationQueue` | `EnqueueAsync(notificationId, cancellationToken)` |
@@ -355,20 +355,24 @@ Every method is async and takes `CancellationToken cancellationToken = default` 
   - `MongoDataAccessBase<T>` (internal, abstract) is the base every Mongo data access class inherits, e.g. `TenantDataAccess : MongoDataAccessBase<Tenant>, ITenantDataAccess`. It provides `Collection` and `NewId()` (an ObjectId hex string). One class per interface. Ids are generated here.
   - `MongoMappings` registers BSON **conventions only** (no class maps, no attributes) for the `DomainModels` namespace: `CamelCaseElementNameConvention` and `IgnoreExtraElementsConvention(true)`. Ids rely on driver defaults: a property named `Id` maps to `_id`, and a `string` is stored as a BSON string. `DateTime` values are stored and read back as UTC. `MongoContext` registers the conventions in its constructor, once per process, before any collection is used.
   - `MongoIndexInitializer` creates the indexes (section 4).
+  - `NotificationDataAccess` sets `updatedAt` itself from the injected `TimeProvider` (`AddDataAccess` also does `TryAddSingleton(TimeProvider.System)`, so it doesn't depend on `AddServices()` being called first). `ListAsync` sorts by `createdAt` descending and counts the total with the same filter. `DeliveryLogDataAccess.GetByNotificationAsync` sorts by `attempt` ascending.
   - The Services interfaces are the only thing Services sees, so moving to another database (SQL, DynamoDB) means new implementations of those interfaces and different registrations in `AddDataAccess`. Generics stay inside DataAccess. There is no generic repository interface in Services.
 - **Integrations:** `SesEmailSender` uses the SES v2 API with a plain-text body and the `Email__From` address. `SqsNotificationQueue` sends the notification id as the message body.
 
 ### 6.4 DeliveryProcessor
 
-`DeliveryProcessor.ProcessAsync(notificationId, attempt, maxAttempts, cancellationToken)` returns a result (`Delivered`, `Retry` or `FailedFinal`, plus the error) instead of throwing, so it is easy to test and each host decides what to do.
+`DeliveryProcessor.ProcessAsync(notificationId, attempt, maxAttempts, cancellationToken)` returns a `DeliveryResult(Outcome, Error)` where `Outcome` is `DeliveryOutcome.Delivered`, `Retry` or `FailedFinal` (`Services/Delivery/`), instead of throwing, so it is easy to test and each host decides what to do. `DeliveryProcessor.MaxAttempts = 3` is the constant the hosts pass; it must match the queue's maximum receives (1.4).
 
-1. Load the notification. If it doesn't exist, return `Delivered` (nothing to do). If its status is already `delivered`, return `Delivered`. This makes duplicate SQS deliveries harmless.
-2. Set status `processing` and `attempts = attempt` (`MarkProcessingAsync`).
-3. Call `IEmailSender.SendAsync`.
-4. **Success:** insert a delivery log (`success`), set status `delivered`, set `deliveredAt`, clear `lastError`.
-5. **Failure:** insert a delivery log (`failed`, with the error message), set `lastError`. If `attempt >= maxAttempts`, set status `failed` and return `FailedFinal`. Otherwise set status `queued` and return `Retry`.
+1. **Claim** the notification atomically with `TryClaimAsync(id, attempt)`: one `FindOneAndUpdate` that matches only when `status` is `queued` or `processing` **and** `attempts < attempt`, and sets status `processing`, `attempts = attempt`, `updatedAt`. If it returns null, return `Delivered` (nothing to do: unknown id, already `delivered` or `failed`, or this attempt was already claimed). Why this filter:
+   - Two copies of the same SQS message carry the same attempt number, so only one can claim it and only one email is sent.
+   - An attempt that crashed after claiming leaves status `processing`. The next receive has a higher attempt number and can still claim it.
+2. Call `IEmailSender.SendAsync`.
+3. **Success:** insert a delivery log (`success`), then set status `delivered`, set `deliveredAt`, clear `lastError`.
+4. **Failure:** insert a delivery log (`failed`, with the exception message), set `lastError`. If `attempt >= maxAttempts`, set status `failed` and return `FailedFinal`. Otherwise set status `queued` and return `Retry`.
 
-**Cancellation:** the token is passed to the load and to `IEmailSender.SendAsync`, but not to the delivery-log insert and status update that follow a successful send, so a cancellation can't leave an email sent with no record of it.
+**Cancellation:** the token is passed to the claim and to `IEmailSender.SendAsync`. The delivery-log insert and status update after the send (success or failure) use `CancellationToken.None`, so a cancellation can't leave an email sent with no record of it. A send that throws because the token was cancelled (host shutting down) is **not** recorded as a failed attempt: the exception propagates and SQS redelivers the message (`catch ... when (!cancellationToken.IsCancellationRequested)`).
+
+**Registration:** singleton (all its dependencies are singletons, and `LocalDeliveryWorker` is a hosted singleton). It is registered in B3.2 together with `IEmailSender`, because the API validates the DI graph at startup in Development.
 
 Callers:
 - **Worker Lambda:** `attempt` comes from `ApproximateReceiveCount`. On `Retry` or `FailedFinal` it **throws**, so SQS retries the message or moves it to the DLQ.
@@ -468,7 +472,7 @@ Unit tests live in `NotificationPlatform.Services.Tests` and use mocks of the Se
 | `AuthService` | Register hashes the password and generates an API key. Duplicate email fails. Login with a wrong password fails |
 | `ApiKeyService` | Generated keys have the `np_` prefix. The hash is deterministic. Two keys differ. Format check accepts generated keys and rejects malformed ones. `Matches` is true only for the key's own hash |
 | `NotificationService` | Creates a `queued` notification and enqueues its id. If enqueue fails, the notification is marked `failed` |
-| `DeliveryProcessor` | Success on first attempt. Failure then success. Final failure at the last attempt. Already-delivered notification is skipped |
+| `DeliveryProcessor` | Success on first attempt. Failure then success. Final failure at the last attempt. Nothing to claim (already delivered, duplicate) is skipped without sending. Cancellation after a successful send still records it. Uses a hand-written `FakeEmailSender` |
 
 End-to-end checks are the manual "done when" checks in the plan's milestones and the smoke test in section 8.6.
 
@@ -502,3 +506,6 @@ Decisions made during the build that change or refine this specification. Each o
 | 2026-11-16 | B2.2 | `User.GetTenantId()` created in B2.2. Bearer configured from `TokenService` through DI | 2.3 |
 | 2026-11-16 | B2.2 | Lifetimes: data access singletons, `AuthService` scoped. Timestamps are not rounded to MongoDB's millisecond precision (a millisecond-rounding helper was judged overkill and removed) | 6.2 |
 | 2026-11-16 | B2.3 | ApiKey handler steps fixed: `NoResult` for a missing header, format check before any database call, lookup by hash, `Matches` (fixed-time) as defence in depth, single `tenant_id` claim. `ApiKeyService` gains `HasValidFormat` and `Matches` | 2.3, 6.2, 9 |
+| 2026-11-18 | B3.1 | Atomic claim: `TryClaimAsync(id, attempt)` (one `FindOneAndUpdate`, matches `queued`/`processing` with `attempts < attempt`) replaces `GetByIdForProcessingAsync` + `MarkProcessingAsync`, so duplicate SQS messages can't send twice and a crashed attempt is still retried. Matches interview guide §19 | 6.2, 6.4 |
+| 2026-11-18 | B3.1 | Second notifications index is `{ tenantId: 1, status: 1, createdAt: -1 }` (ESR) instead of `{ tenantId: 1, status: 1 }`. Matches interview guide §19 | 4 |
+| 2026-11-18 | B3.1 | `DeliveryResult(Outcome, Error)` with `DeliveryOutcome` enum, `DeliveryProcessor.MaxAttempts = 3`. Failure bookkeeping also uses `CancellationToken.None`; a cancelled send is not recorded as a failed attempt. Processor registered in B3.2. DALs take `updatedAt` from `TimeProvider` | 6.3, 6.4, 9 |
